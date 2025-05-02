@@ -1,0 +1,1004 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ArcGIS Web App: Attribute Filtering and Overlay Analysis</title>
+  <link rel="stylesheet" href="https://js.arcgis.com/4.28/esri/themes/light/main.css">
+  <script src="https://js.arcgis.com/4.28/"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body, #viewDiv {
+      padding: 0;
+      margin: 0;
+      height: 100%;
+      width: 100%;
+    }
+    #filterPanel {
+      position: absolute;
+      top: 70px; /* Adjusted to account for header height */
+      left: 10px;
+      background-color: white;
+      padding: 15px;
+      border-radius: 5px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      z-index: 100;
+    }
+    #header {
+      position: fixed;
+      top: 0;
+      width: 100%;
+      background-color: #f9fafb;
+      border-bottom: 1px solid #e5e7eb;
+      z-index: 50; /* Lowered z-index to avoid overlapping panels */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 0;
+    }
+    #header img {
+      width: 40px;
+      height: 40px;
+      object-fit: cover;
+      border-radius: 50%;
+      margin: 0 10px;
+    }
+    #viewDiv {
+      padding-top: 60px; /* Added padding to prevent content from being hidden under header */
+    }
+  </style>
+</head>
+<body class="bg-blue-100">
+  <div id="header" class="bg-blue-50">
+    <img src="https://i.ibb.co/mC0XMb9v/1f436.png" alt="Cute Puppy">
+    <h1 class="text-2xl font-bold text-gray-800">Pet Friendly Home Finder</h1>
+    <img src="https://i.ibb.co/RwddkgJ/cat-facer.png" alt="Cute Kitten">
+  </div>
+  <div id="viewDiv"></div>
+  <div id="filterPanel" class="w-64">
+    <h2 class="text-lg font-bold mb-4">Select Services and View Area Ratings</h2>
+    <div class="mb-4">
+      <label for="showhouse" class="flex items-center text-sm font-medium">
+        <input id="showhouse" type="checkbox" checked class="mr-2">
+        Show pet_friendly_house
+      </label>
+    </div>
+    <div class="mb-4">
+      <label for="layerSelect" class="block text-sm font-medium">Select Pet-Friendly Facilities</label>
+      <select id="layerSelect" class="w-full p-2 border rounded">
+        <option value="pet_friendly_house">Pet-Friendly House</option>
+        <option value="pet_store">Pet Store</option>
+        <option value="inclusive_park">Inclusive Park</option>
+        <option value="pet_garden">Pet Garden</option>
+        <option value="pet_friendly_restaurant">Pet-Friendly Restaurant</option>
+        <option value="pet_clinic">Pet Clinic</option>
+        <option value="pet_friendly_mall">Pet-Friendly Mall</option>
+        <option value="MTR">MTR</option>
+      </select>
+    </div>
+    <div class="mb-4">
+      <label for="areaSelect" class="block text-sm font-medium">Select District Area</label>
+      <select id="areaSelect" class="w-full p-2 border rounded">
+        <option value="all">All Areas</option>
+        <option value="中西區">中西區</option>
+        <option value="灣仔區">灣仔區</option>
+        <option value="東區">東區</option>
+      </select>
+    </div>
+    <div class="mb-4">
+      <label for="showStudyArea" class="flex items-center text-sm font-medium">
+        <input id="showStudyArea" type="checkbox" checked class="mr-2">
+        Show Search Area
+      </label>
+    </div>
+    <div class="mb-4">
+      <label for="bufferDistance" class="block text-sm font-medium">Buffer Distance (meters)</label>
+      <input id="bufferDistance" type="number" min="1" value="500" class="w-full p-2 border rounded" placeholder="Enter buffer distance">
+    </div>
+    <button id="summarizeNearbyBtn" class="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600">Summarize Nearby Facilities</button><br><br>
+    <div class="mb-4">
+      <label class="block text-sm font-medium">Select Different Types Of Service Area</label>
+      <div class="mt-2">
+        <label class="inline-flex items-center">
+          <input type="checkbox" id="storeServiceArea" class="form-checkbox">
+          <span class="ml-2">Pet Store Service Area</span>
+        </label>
+      </div>
+      <div class="mt-2">
+        <label class="inline-flex items-center">
+          <input type="checkbox" id="subwayServiceArea" class="form-checkbox">
+          <span class="ml-2">InclusivePark Service Area</span>
+        </label>
+      </div>
+      <div class="mt-2">
+        <label class="inline-flex items-center">
+          <input type="checkbox" id="petgardenServiceArea" class="form-checkbox">
+          <span class="ml-2">Petgarden Service Area</span>
+        </label>
+      </div>
+      <div class="mt-2">
+        <label class="inline-flex items-center">
+          <input type="checkbox" id="restaurantServiceArea" class="form-checkbox">
+          <span class="ml-2">Restaurant Service Area</span>
+        </label>
+      </div>
+      <div class="mt-2">
+        <label class="inline-flex items-center">
+          <input type="checkbox" id="clinicServiceArea" class="form-checkbox">
+          <span class="ml-2">Clinic Service Area</span>
+        </label>
+      </div>
+      <div class="mt-2">
+        <label class="inline-flex items-center">
+          <input type="checkbox" id="mallServiceArea" class="form-checkbox">
+          <span class="ml-2">Mall Service Area</span>
+        </label>
+      </div>
+      <div class="mt-2">
+        <label class="inline-flex items-center">
+          <input type="checkbox" id="MTRServiceArea" class="form-checkbox">
+          <span class="ml-2">MTR Service Area</span>
+        </label>
+      </div>
+    </div>
+    <button id="generateOverlayBtn" class="w-full bg-purple-500 text-white p-2 rounded hover:bg-purple-600 mb-2">Generate Overlay Analysis</button>
+  </div>
+
+  <script type="text/javascript">
+    var gk_isXlsx = false;
+    var gk_xlsxFileLookup = {};
+    var gk_fileData = {};
+    function filledCell(cell) {
+      return cell !== '' && cell != null;
+    }
+    function loadFileData(filename) {
+      if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+        try {
+          var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+          var firstSheetName = workbook.SheetNames[0];
+          var worksheet = workbook.Sheets[firstSheetName];
+          var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+          var filteredData = jsonData.filter(row => row.some(filledCell));
+          var headerRowIndex = filteredData.findIndex((row, index) =>
+            row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+          );
+          if (headerRowIndex === -1 || headerRowIndex > 25) {
+            headerRowIndex = 0;
+          }
+          var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex));
+          csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+          return csv;
+        } catch (e) {
+          console.error(e);
+          return "";
+        }
+      }
+      return gk_fileData[filename] || "";
+    }
+  </script>
+
+  <script>
+    require([
+      "esri/Map",
+      "esri/views/MapView",
+      "esri/layers/FeatureLayer",
+      "esri/renderers/HeatmapRenderer",
+      "esri/widgets/Legend",
+      "esri/rest/support/Query",
+      "esri/layers/GraphicsLayer",
+      "esri/geometry/geometryEngine",
+      "esri/Graphic",
+      "esri/symbols/SimpleFillSymbol",
+      "esri/renderers/ClassBreaksRenderer",
+      "esri/geometry/Polygon",
+      "esri/symbols/SimpleMarkerSymbol",
+      "esri/widgets/BasemapToggle",
+      "esri/widgets/BasemapGallery"
+    ], function(
+      Map, MapView, FeatureLayer, HeatmapRenderer, Legend, Query, GraphicsLayer, 
+      geometryEngine, Graphic, SimpleFillSymbol, ClassBreaksRenderer, Polygon, 
+      SimpleMarkerSymbol, BasemapToggle, BasemapGallery
+    ) {
+      const map = new Map({ basemap: "streets" });
+
+      const view = new MapView({
+        container: "viewDiv",
+        map: map,
+        center: [114.1, 22.3],
+        zoom: 11
+      });
+
+      // 添加底图库控件
+      const gallery = new BasemapGallery({
+        view: view,
+        source: {
+          portal: {
+            url: "https://www.arcgis.com",
+            useVectorBasemaps: true // 加载切片底图
+          }
+        },
+        expanded: false
+      });
+      view.ui.add(gallery, "top-right"); // 将底图库控件放置在右上角
+      // 添加CSS来缩小控件大小
+      gallery.domNode.style.width = "130px";  // 设置宽度为120px
+      gallery.domNode.style.height = "500px"; // 设置高度为120px
+      gallery.domNode.style.marginTop = "60px"; // Added margin to avoid header overlap
+      
+      const overlayLayer = new GraphicsLayer({ title: "Overlay Analysis" });
+      const nearbySummaryLayer = new GraphicsLayer({ title: "Nearby Facilities Summary" });
+      map.addMany([overlayLayer, nearbySummaryLayer]);
+
+      const study_area = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/research_area0105/FeatureServer/0",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "name", label: "Name" },
+              { fieldName: "FID", label: "FID" },
+              { fieldName: "ORIG_OID", label: "Original OID" },
+              { fieldName: "NAME_TC", label: "Chinese Name" }
+            ]
+          }]
+        }
+      });
+      map.add(study_area);
+      
+      const house_steady = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/NewLocalMap_WFL1/FeatureServer/1",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "name", label: "Name" },
+              { fieldName: "DDLat", label: "DDLat" },
+              { fieldName: "DDLon", label: "DDLon" }
+            ]
+          }]
+        }
+      });
+      map.add(house_steady);
+
+      const pet_friendly_house = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/NewLocalMap_WFL1/FeatureServer/1",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "name", label: "Name" },
+              { fieldName: "DDLat", label: "DDLat" },
+              { fieldName: "DDLon", label: "DDLon" }
+            ]
+          }]
+        }
+      });
+      map.add(pet_friendly_house);
+      
+      const pet_store = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/NewLocalMap_WFL1/FeatureServer/7",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "name", label: "Name" },
+              { fieldName: "FID", label: "FID" },
+              { fieldName: "ORIG_OID", label: "Original OID" }
+            ]
+          }]
+        }
+      });
+      map.add(pet_store);
+      
+      const inclusive_park = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/NewLocalMap_WFL1/FeatureServer/5",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{NAME_TC}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "NAME_TC", label: "Name" },
+              { fieldName: "NSEARCH02_", label: "Opening hour" }
+            ]
+          }]
+        }
+      });
+      map.add(inclusive_park);
+      
+      const pet_garden = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/NewLocalMap_WFL1/FeatureServer/6",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{NAME_TC}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "NAME_TC", label: "Name" }
+            ]
+          }]
+        }
+      });
+      map.add(pet_garden);
+      
+      const pet_friendly_restaurant = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/NewLocalMap_WFL1/FeatureServer/3",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "name", label: "name" },
+              { fieldName: "address", label: "address" }
+            ]
+          }]
+        }
+      });
+      map.add(pet_friendly_restaurant);
+      
+      const pet_clinic = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/NewLocalMap_WFL1/FeatureServer/4",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "name", label: "name" },
+              { fieldName: "address", label: "address" }
+            ]
+          }]
+        }
+      });
+      map.add(pet_clinic);
+      
+      const pet_friendly_mall = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/NewLocalMap_WFL1/FeatureServer/0",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "name", label: "name" },
+              { fieldName: "address", label: "address" }
+            ]
+          }]
+        }
+      });
+      map.add(pet_friendly_mall);
+      
+      const MTR = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/NewLocalMap_WFL1/FeatureServer/2",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{C_SITENAME}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "C_SITENAME", label: "C_SITENAME" },
+              { fieldName: "CHINESENAM", label: "CHINESENAM" }
+            ]
+          }]
+        }
+      });
+      map.add(MTR);
+      
+      const store_servicearea = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/serviceareanew2_WFL1/FeatureServer/2",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "Name", label: "Name" }
+            ]
+          }]
+        },
+        visible: false
+      });
+      map.add(store_servicearea);
+      
+      const inclusivePark_servicearea = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/serviceareanew1_WFL1/FeatureServer/9",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "Name", label: "Name" }
+            ]
+          }]
+        },
+        visible: false
+      });
+      map.add(inclusivePark_servicearea);
+      
+      const petgarden_servicearea = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/serviceareanew2_WFL1/FeatureServer/3",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "Name", label: "Name" }
+            ]
+          }]
+        },
+        visible: false
+      });
+      map.add(petgarden_servicearea);
+      
+      const pet_friendly_restaurant_servicearea = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/serviceareanew1_WFL1/FeatureServer/8",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "Name", label: "Name" }
+            ]
+          }]
+        },
+        visible: false
+      });
+      map.add(pet_friendly_restaurant_servicearea);
+      
+      const pet_clinic_servicearea = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/serviceareanew2_WFL1/FeatureServer/1",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "Name", label: "Name" }
+            ]
+          }]
+        },
+        visible: false
+      });
+      map.add(pet_clinic_servicearea);
+      
+      const pet_friendly_mall_servicearea = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/serviceareanew1_WFL1/FeatureServer/10",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "Name", label: "Name" }
+            ]
+          }]
+        },
+        visible: false
+      });
+      map.add(pet_friendly_mall_servicearea);
+      
+      const MTR_servicearea = new FeatureLayer({
+        url: "https://services7.arcgis.com/kJjJ8lxiyn8LOYyS/arcgis/rest/services/MTR_buffer/FeatureServer/0",
+        outFields: ["*"],
+        popupTemplate: {
+          title: "{name}",
+          content: [{
+            type: "fields",
+            fieldInfos: [
+              { fieldName: "Name", label: "Name" }
+            ]
+          }]
+        },
+        visible: false
+      });
+      map.add(MTR_servicearea);
+
+      const legend = new Legend({
+        view: view,
+        layerInfos: [
+          { layer: house_steady, title: "House" },
+          { layer: pet_store, title: "pet_store Locations" },
+          { layer: inclusive_park, title: "inclusive_park" },
+          { layer: pet_garden, title: "pet_garden" },
+          { layer: pet_friendly_restaurant, title: "pet_friendly_restaurant" },
+          { layer: pet_clinic, title: "pet_clinic" },
+          { layer: pet_friendly_mall, title: "pet_friendly_mall" },
+          { layer: MTR, title: "MTR" },
+          { layer: store_servicearea, title: "store Service Area" },
+          { layer: inclusivePark_servicearea, title: "Subway Service Area" },
+          { layer: petgarden_servicearea, title: "petgarden_servicearea" },
+          { layer: pet_friendly_restaurant_servicearea, title: "pet_friendly_restaurant_servicearea" },
+          { layer: pet_clinic_servicearea, title: "pet_clinic_servicearea" },
+          { layer: pet_friendly_mall_servicearea, title: "pet_friendly_mall_servicearea" },
+          { layer: MTR_servicearea, title: "MTR_servicearea" },
+          { layer: overlayLayer, title: "Overlay Analysis" },
+          { layer: nearbySummaryLayer, title: "Nearby Facilities Summary" }
+        ]
+      });
+      view.ui.add(legend, "bottom-right");
+
+      view.on("pointer-move", function(event) {
+        view.hitTest(event).then(function(response) {
+          const graphic = response.results.find(function(result) {
+            return result.graphic.layer === pet_friendly_house ||
+                   result.graphic.layer === pet_store ||
+                   result.graphic.layer === inclusive_park ||
+                   result.graphic.layer === pet_garden ||
+                   result.graphic.layer === pet_friendly_restaurant ||
+                   result.graphic.layer === pet_clinic ||
+                   result.graphic.layer === pet_friendly_mall ||
+                   result.graphic.layer === MTR ||
+                   result.graphic.layer === store_servicearea ||
+                   result.graphic.layer === inclusivePark_servicearea ||
+                   result.graphic.layer === petgarden_servicearea ||
+                   result.graphic.layer === pet_friendly_restaurant_servicearea ||
+                   result.graphic.layer === pet_clinic_servicearea ||
+                   result.graphic.layer === pet_friendly_mall_servicearea ||
+                   result.graphic.layer === MTR_servicearea ||
+                   result.graphic.layer === overlayLayer ||
+                   result.graphic.layer === nearbySummaryLayer;
+          });
+          if (graphic) {
+            view.popup.open({
+              features: [graphic.graphic],
+              location: event.mapPoint
+            });
+          } else {
+            view.popup.close();
+          }
+        });
+      });
+
+      function applySpatialFilter() {
+        const selectedArea = document.getElementById("areaSelect").value;
+        const selectedLayer = document.getElementById("layerSelect").value;
+        let targetLayer;
+        if (selectedLayer === "pet_friendly_house") {
+          targetLayer = pet_friendly_house;
+        } else if (selectedLayer === "pet_store") {
+          targetLayer = pet_store;
+        } else if (selectedLayer === "inclusive_park") {
+          targetLayer = inclusive_park;
+        } else if (selectedLayer === "pet_garden") {
+          targetLayer = pet_garden;
+        } else if (selectedLayer === "pet_friendly_restaurant") {
+          targetLayer = pet_friendly_restaurant;
+        } else if (selectedLayer === "pet_clinic") {
+          targetLayer = pet_clinic;
+        } else if (selectedLayer === "pet_friendly_mall") {
+          targetLayer = pet_friendly_mall;
+        } else if (selectedLayer === "MTR") {
+          targetLayer = MTR;
+        }
+
+        pet_friendly_house.visible = selectedLayer === "pet_friendly_house";
+        pet_store.visible = selectedLayer === "pet_store";
+        inclusive_park.visible = selectedLayer === "inclusive_park";
+        pet_garden.visible = selectedLayer === "pet_garden";
+        pet_friendly_restaurant.visible = selectedLayer === "pet_friendly_restaurant";
+        pet_clinic.visible = selectedLayer === "pet_clinic";
+        pet_friendly_mall.visible = selectedLayer === "pet_friendly_mall";
+        MTR.visible = selectedLayer === "MTR";
+        
+        if (selectedArea === "all") {
+          targetLayer.definitionExpression = "1=1";
+          return;
+        }
+
+        const areaQuery = new Query({
+          where: `NAME_TC = '${selectedArea}'`,
+          outFields: ["*"],
+          returnGeometry: true
+        });
+
+        study_area.queryFeatures(areaQuery).then(function(areaResults) {
+          if (areaResults.features.length === 0) {
+            console.log("No study area found for:", selectedArea);
+            targetLayer.definitionExpression = "1=0";
+            return;
+          }
+
+          const areaGeometry = areaResults.features[0].geometry;
+          const pointQuery = new Query({
+            geometry: areaGeometry,
+            spatialRelationship: "intersects",
+            outFields: ["FID"],
+            returnGeometry: false
+          });
+
+          targetLayer.queryFeatures(pointQuery).then(function(pointResults) {
+            if (pointResults.features.length === 0) {
+              console.log("No points found in:", selectedArea);
+              targetLayer.definitionExpression = "1=0";
+              return;
+            }
+
+            const fids = pointResults.features.map(feature => feature.attributes.FID);
+            const definitionExpression = `FID IN (${fids.join(",")})`;
+            targetLayer.definitionExpression = definitionExpression;
+            console.log(`Filtered ${fids.length} points in ${selectedArea}`);
+          }).catch(function(error) {
+            console.error("Error querying points:", error);
+          });
+        }).catch(function(error) {
+          console.error("Error querying study area:", error);
+        });
+      }
+
+      function performOverlayAnalysis() {
+        overlayLayer.removeAll();
+
+        const bufferLayers = [
+          { layer: store_servicearea, name: "Pet Store Service Area", visible: document.getElementById("storeServiceArea").checked },
+          { layer: inclusivePark_servicearea, name: "InclusivePark Service Area", visible: document.getElementById("subwayServiceArea").checked },
+          { layer: petgarden_servicearea, name: "Pet Garden Service Area", visible: document.getElementById("petgardenServiceArea").checked },
+          { layer: pet_friendly_restaurant_servicearea, name: "Restaurant Service Area", visible: document.getElementById("restaurantServiceArea").checked },
+          { layer: pet_clinic_servicearea, name: "Clinic Service Area", visible: document.getElementById("clinicServiceArea").checked },
+          { layer: pet_friendly_mall_servicearea, name: "Mall Service Area", visible: document.getElementById("mallServiceArea").checked },
+          { layer: MTR_servicearea, name: "MTR Service Area", visible: document.getElementById("MTRServiceArea").checked }
+        ].filter(b => b.visible);
+
+        if (bufferLayers.length === 0) {
+          alert("Please select at least one buffer layer.");
+          return;
+        }
+
+        const bufferPromises = bufferLayers.map(({ layer, name }) => {
+          const query = layer.createQuery();
+          query.where = "1=1";
+          query.outFields = ["*"];
+          query.returnGeometry = true;
+
+          return layer.queryFeatures(query).then(function(response) {
+            if (response.features.length === 0) {
+              console.warn(`No features found for layer ${name}`);
+              return null;
+            }
+
+            const geometries = response.features
+              .map(f => f.geometry)
+              .filter(g => g && g.type === "polygon");
+            if (geometries.length === 0) {
+              console.warn(`No valid geometries for layer ${name}`);
+              return null;
+            }
+
+            try {
+              const dissolvedBuffer = geometryEngine.union(geometries);
+              if (!dissolvedBuffer) throw new Error(`Failed to dissolve geometries for ${name}`);
+              return { geometry: dissolvedBuffer, layer: name };
+            } catch (error) {
+              console.error(`Error processing geometries for ${name}:`, error);
+              return null;
+            }
+          }).catch(error => {
+            console.error(`Error querying features for ${name}:`, error);
+            return null;
+          });
+        });
+
+        Promise.all(bufferPromises).then(function(dissolvedBuffers) {
+          dissolvedBuffers = dissolvedBuffers.filter(b => b !== null && b.geometry);
+          if (dissolvedBuffers.length === 0) {
+            alert("No valid buffer geometries found. Check layer data.");
+            return;
+          }
+
+          const extent = dissolvedBuffers.reduce((ext, buf) => {
+            const bufExtent = buf.geometry.extent;
+            return ext ? ext.union(bufExtent) : bufExtent.clone();
+          }, null);
+
+          const cellSize = Math.min(extent.width, extent.height) / 50;
+          const gridPolys = [];
+          for (let x = extent.xmin; x < extent.xmax; x += cellSize) {
+            for (let y = extent.ymin; y < extent.ymax; y += cellSize) {
+              const poly = new Polygon({
+                rings: [[
+                  [x, y],
+                  [x + cellSize, y],
+                  [x + cellSize, y + cellSize],
+                  [x, y + cellSize],
+                  [x, y]
+                ]],
+                spatialReference: extent.spatialReference
+              });
+              gridPolys.push(poly);
+            }
+          }
+
+          const overlayGeometries = gridPolys.map(poly => {
+            const count = dissolvedBuffers.filter(buf =>
+              geometryEngine.intersects(poly, buf.geometry)
+            ).length;
+            return count > 0 ? { geometry: poly, count } : null;
+          }).filter(g => g !== null);
+
+          const maxCount = Math.max(...overlayGeometries.map(g => g.count), 1);
+          const renderer = new ClassBreaksRenderer({
+            field: "Overlap_Count",
+            classBreakInfos: Array.from({ length: maxCount }, (_, i) => ({
+              minValue: i + 1,
+              maxValue: i + 1,
+              symbol: new SimpleFillSymbol({
+                color: [255, 255 - (i + 1) * (255 / maxCount), 0, 0.5],
+                outline: { color: [0, 0, 0, 0.8], width: 1 }
+              }),
+              label: `${i + 1} Overlaps`
+            }))
+          });
+          overlayLayer.renderer = renderer;
+
+          const overlayGraphics = overlayGeometries.map(({ geometry, count }) => new Graphic({
+            geometry,
+            attributes: { Overlap_Count: count },
+            symbol: new SimpleFillSymbol({
+              color: [255, 255 - count * (255 / maxCount), 0, 0.5],
+              outline: { color: [0, 0, 0, 0.8], width: 0.1 }
+            }),
+            popupTemplate: {
+              title: "Overlay Region",
+              content: [{
+                type: "fields",
+                fieldInfos: [
+                  { fieldName: "Overlap_Count", label: "Number of Overlapping Buffers" }
+                ]
+              }]
+            }
+          }));
+
+          overlayLayer.addMany(overlayGraphics);
+          
+          bufferLayers.forEach(({ layer }) => {
+            layer.visible = false;
+          });
+
+          console.log(`Generated overlay with ${overlayGraphics.length} regions, max overlap: ${maxCount}`);
+        }).catch(function(error) {
+          console.error("Error in overlay processing:", error);
+          alert("Failed to generate overlay. Check console for details.");
+        });
+      }
+
+      function summarizeNearbyFacilities() {
+        nearbySummaryLayer.removeAll();
+
+        const selectedLayerType = document.getElementById("layerSelect").value;
+        const bufferDistanceInput = document.getElementById("bufferDistance").value;
+        const bufferDistance = parseFloat(bufferDistanceInput);
+
+        if (isNaN(bufferDistance) || bufferDistance <= 0) {
+          alert("Please enter a valid buffer distance (positive number in meters).");
+          return;
+        }
+
+        let facilityLayer;
+        let facilityTitle;
+
+        switch (selectedLayerType) {
+          case "pet_store":
+            facilityLayer = pet_store;
+            facilityTitle = "Pet Stores";
+            break;
+          case "inclusive_park":
+            facilityLayer = inclusive_park;
+            facilityTitle = "Inclusive Parks";
+            break;
+          case "pet_garden":
+            facilityLayer = pet_garden;
+            facilityTitle = "Pet Gardens";
+            break;
+          case "pet_friendly_restaurant":
+            facilityLayer = pet_friendly_restaurant;
+            facilityTitle = "Pet-Friendly Restaurants";
+            break;
+          case "pet_clinic":
+            facilityLayer = pet_clinic;
+            facilityTitle = "Pet Clinics";
+            break;
+          case "pet_friendly_mall":
+            facilityLayer = pet_friendly_mall;
+            facilityTitle = "Pet-Friendly Malls";
+            break;
+          case "MTR":
+            facilityLayer = MTR;
+            facilityTitle = "MTR Stations";
+            break;
+          default:
+            alert("Please select a valid facility type for nearby analysis.");
+            return;
+        }
+
+        const houseQuery = pet_friendly_house.createQuery();
+        houseQuery.where = pet_friendly_house.definitionExpression || "1=1";
+        houseQuery.outFields = ["*"];
+        houseQuery.returnGeometry = true;
+
+        pet_friendly_house.queryFeatures(houseQuery).then(function(houseResults) {
+          if (houseResults.features.length === 0) {
+            alert("No pet-friendly houses found in the current filter.");
+            return;
+          }
+
+          const facilityQuery = facilityLayer.createQuery();
+          facilityQuery.where = facilityLayer.definitionExpression || "1=1";
+          facilityQuery.outFields = ["*"];
+          facilityQuery.returnGeometry = true;
+
+          facilityLayer.queryFeatures(facilityQuery).then(function(facilityResults) {
+            if (facilityResults.features.length === 0) {
+              alert(`No ${facilityTitle.toLowerCase()} found in the current filter.`);
+              return;
+            }
+
+            const houseFeatures = houseResults.features;
+            const facilityFeatures = facilityResults.features;
+            const summaryGraphics = [];
+
+            houseFeatures.forEach(house => {
+              const housePoint = house.geometry;
+              const buffer = geometryEngine.geodesicBuffer(housePoint, bufferDistance, "meters");
+
+              let nearbyCount = 0;
+              facilityFeatures.forEach(facility => {
+                if (geometryEngine.intersects(buffer, facility.geometry)) {
+                  nearbyCount++;
+                }
+              });
+
+              const color = nearbyCount === 0 
+                ? [200, 200, 255, 0.6] 
+                : [0, 100 + (155 * nearbyCount / (nearbyCount + 1)), 255, 0.6];
+
+              const symbol = new SimpleMarkerSymbol({
+                style: "circle",
+                size: 8 + nearbyCount * 3,
+                color: [173, 216, 230, 0.6], 
+                outline: { color: [0, 0, 0, 0.8], width: 0.2 }
+              });
+
+              const graphic = new Graphic({
+                geometry: housePoint,
+                symbol: symbol,
+                attributes: {
+                  House_Name: house.attributes.name,
+                  Nearby_Count: nearbyCount,
+                  Buffer_Distance: bufferDistance
+                },
+                popupTemplate: {
+                  title: "{House_Name}",
+                  content: [{
+                    type: "fields",
+                    fieldInfos: [
+                      { fieldName: "Nearby_Count", label: `Number of Nearby ${facilityTitle}` },
+                      { fieldName: "Buffer_Distance", label: "Buffer Distance (meters)" }
+                    ]
+                  }]
+                }
+              });
+
+              summaryGraphics.push(graphic);
+            });
+
+            const maxCount = Math.max(...summaryGraphics.map(g => g.attributes.Nearby_Count), 1);
+            const renderer = new ClassBreaksRenderer({
+              field: "Nearby_Count",
+              classBreakInfos: Array.from({ length: maxCount + 1 }, (_, i) => ({
+                minValue: i,
+                maxValue: i,
+                symbol: new SimpleMarkerSymbol({
+                  style: "circle",
+                  size: 8 + i * 3,
+                  color: i === 0 ? [200, 200, 255, 0.6] : [0, 100 + (155 * i / (i + 1)), 255, 0.6],
+                  outline: { color: [0, 0, 0, 0.8], width: 1 }
+                }),
+                label: i === 0 ? "0 Facilities" : `${i} ${facilityTitle}`
+              }))
+            });
+
+            nearbySummaryLayer.renderer = renderer;
+            nearbySummaryLayer.addMany(summaryGraphics);
+
+            console.log(`Summarized ${summaryGraphics.length} houses with nearby ${facilityTitle}, max count: ${maxCount}, buffer distance: ${bufferDistance} meters`);
+          }).catch(function(error) {
+            console.error("Error querying facilities:", error);
+            alert("Failed to query facilities. Check console for details.");
+          });
+        }).catch(function(error) {
+          console.error("Error querying houses:", error);
+          alert("Failed to query houses. Check console for details.");
+        });
+      }
+
+      document.getElementById("layerSelect").addEventListener("change", applySpatialFilter);
+      document.getElementById("areaSelect").addEventListener("change", applySpatialFilter);
+      document.getElementById("storeServiceArea").addEventListener("change", function(event) {
+        store_servicearea.visible = event.target.checked;
+      });
+      document.getElementById("subwayServiceArea").addEventListener("change", function(event) {
+        inclusivePark_servicearea.visible = event.target.checked;
+      });
+      document.getElementById("petgardenServiceArea").addEventListener("change", function(event) {
+        petgarden_servicearea.visible = event.target.checked;
+      });
+      document.getElementById("restaurantServiceArea").addEventListener("change", function(event) {
+        pet_friendly_restaurant_servicearea.visible = event.target.checked;
+      });
+      document.getElementById("clinicServiceArea").addEventListener("change", function(event) {
+        pet_clinic_servicearea.visible = event.target.checked;
+      });
+      document.getElementById("mallServiceArea").addEventListener("change", function(event) {
+        pet_friendly_mall_servicearea.visible = event.target.checked;
+      });
+      document.getElementById("MTRServiceArea").addEventListener("change", function(event) {
+        MTR_servicearea.visible = event.target.checked;
+      }); 
+      document.getElementById("showStudyArea").addEventListener("change", function() {
+        study_area.visible = this.checked;
+      });
+      document.getElementById("showhouse").addEventListener("change", function() {
+        house_steady.visible = this.checked;
+      });
+
+      document.getElementById("generateOverlayBtn").addEventListener("click", performOverlayAnalysis);
+      document.getElementById("summarizeNearbyBtn").addEventListener("click", summarizeNearbyFacilities);
+
+      view.when(() => {
+        applySpatialFilter();
+      });
+    });
+  </script>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'938e7ff98a677b9c',t:'MTc0NjA5NDM0MC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>
+</body>
+</html>
